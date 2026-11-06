@@ -1,0 +1,577 @@
+{
+  "info": {
+    "_postman_id": "6f3a0a8e-5b2c-4c55-9a51-3c1f3f2d9a10",
+    "name": "ATM Cash Management",
+    "description": "End-to-end scenario, in order: create ATM → configure cassettes → load cash → put in service → request quote → confirm → deposit → switch to maintenance → reconcile → report.\n\nRun the whole collection with the Collection Runner (environment: 'ATM Local (docker compose)'). Every request has tests; ids are passed between requests via collection variables. The second folder demonstrates four-eyes approval.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    { "key": "atmId", "value": "" },
+    { "key": "quoteId", "value": "" },
+    { "key": "idempotencyKey", "value": "" },
+    { "key": "withdrawalId", "value": "" },
+    { "key": "reconciliationBody", "value": "" },
+    { "key": "reconciliationId", "value": "" },
+    { "key": "cardNumber", "value": "4111111111111111" }
+  ],
+  "item": [
+    {
+      "name": "1. End-to-end scenario",
+      "item": [
+        {
+          "name": "Health check",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('API and database are healthy', () => {",
+                  "    pm.response.to.have.status(200);",
+                  "    pm.expect(pm.response.json().status).to.eql('Healthy');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "url": { "raw": "{{baseUrl}}/health", "host": ["{{baseUrl}}"], "path": ["health"] }
+          }
+        },
+        {
+          "name": "Create ATM",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('ATM created as UNCONFIGURED', () => {",
+                  "    pm.response.to.have.status(201);",
+                  "    const atm = pm.response.json();",
+                  "    pm.expect(atm.state).to.eql('UNCONFIGURED');",
+                  "    pm.collectionVariables.set('atmId', atm.id);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{\n  \"code\": \"ATM-{{$timestamp}}\",\n  \"location\": \"Istanbul - Kadikoy Branch\"\n}" },
+            "url": { "raw": "{{baseUrl}}/api/atms", "host": ["{{baseUrl}}"], "path": ["api", "atms"] }
+          }
+        },
+        {
+          "name": "Configure cassettes",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('5 cassettes configured, ATM is CONFIGURED', () => {",
+                  "    pm.response.to.have.status(200);",
+                  "    const atm = pm.response.json();",
+                  "    pm.expect(atm.state).to.eql('CONFIGURED');",
+                  "    pm.expect(atm.cassettes).to.have.lengthOf(5);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "PUT",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "X-User", "value": "operator.alice" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"cassettes\": [\n    { \"slot\": 1, \"type\": \"DEPOSIT\" },\n    { \"slot\": 2, \"type\": \"RECYCLING\", \"currency\": \"TRY\", \"denomination\": 100 },\n    { \"slot\": 3, \"type\": \"RECYCLING\", \"currency\": \"TRY\", \"denomination\": 50 },\n    { \"slot\": 4, \"type\": \"RECYCLING\", \"currency\": \"TRY\", \"denomination\": 20 },\n    { \"slot\": 5, \"type\": \"RECYCLING\", \"currency\": \"USD\", \"denomination\": 100 }\n  ]\n}"
+            },
+            "url": { "raw": "{{baseUrl}}/api/atms/{{atmId}}/cassettes", "host": ["{{baseUrl}}"], "path": ["api", "atms", "{{atmId}}", "cassettes"] }
+          }
+        },
+        {
+          "name": "Load cash",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Cash recorded, ATM is LOADED', () => {",
+                  "    pm.response.to.have.status(200);",
+                  "    const atm = pm.response.json();",
+                  "    pm.expect(atm.state).to.eql('LOADED');",
+                  "    pm.expect(atm.cassettes.find(c => c.slot === 2).count).to.eql(50);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "X-User", "value": "operator.alice" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"items\": [\n    { \"slot\": 2, \"count\": 50 },\n    { \"slot\": 3, \"count\": 40 },\n    { \"slot\": 4, \"count\": 60 },\n    { \"slot\": 5, \"count\": 30 }\n  ]\n}"
+            },
+            "url": { "raw": "{{baseUrl}}/api/atms/{{atmId}}/cash-loads", "host": ["{{baseUrl}}"], "path": ["api", "atms", "{{atmId}}", "cash-loads"] }
+          }
+        },
+        {
+          "name": "Put in service",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('ATM is IN_SERVICE', () => {",
+                  "    pm.response.to.have.status(200);",
+                  "    pm.expect(pm.response.json().state).to.eql('IN_SERVICE');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "X-User", "value": "operator.alice" }
+            ],
+            "body": { "mode": "raw", "raw": "{\n  \"targetState\": \"IN_SERVICE\"\n}" },
+            "url": { "raw": "{{baseUrl}}/api/atms/{{atmId}}/state", "host": ["{{baseUrl}}"], "path": ["api", "atms", "{{atmId}}", "state"] }
+          }
+        },
+        {
+          "name": "Request withdrawal quote",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Exact breakdown with fewest notes, notes reserved', () => {",
+                  "    pm.response.to.have.status(201);",
+                  "    const quote = pm.response.json();",
+                  "    pm.expect(quote.status).to.eql('ACTIVE');",
+                  "    pm.expect(quote.exactMatch).to.be.true;",
+                  "    pm.expect(quote.options[0].amount).to.eql(370);",
+                  "    pm.expect(quote.options[0].noteCount).to.eql(5);",
+                  "    pm.collectionVariables.set('quoteId', quote.quoteId);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{\n  \"cardNumber\": \"{{cardNumber}}\",\n  \"currency\": \"TRY\",\n  \"amount\": 370\n}" },
+            "url": { "raw": "{{baseUrl}}/api/atms/{{atmId}}/withdrawal-quotes", "host": ["{{baseUrl}}"], "path": ["api", "atms", "{{atmId}}", "withdrawal-quotes"] }
+          }
+        },
+        {
+          "name": "Confirm withdrawal",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// A fresh key per scenario run; the next request replays it.",
+                  "pm.collectionVariables.set('idempotencyKey', pm.variables.replaceIn('{{$guid}}'));"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Cash debited', () => {",
+                  "    pm.response.to.have.status(200);",
+                  "    pm.expect(pm.response.headers.get('Idempotent-Replayed')).to.eql('false');",
+                  "    const w = pm.response.json();",
+                  "    pm.expect(w.amount).to.eql(370);",
+                  "    pm.collectionVariables.set('withdrawalId', w.withdrawalId);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Idempotency-Key", "value": "{{idempotencyKey}}" }
+            ],
+            "body": { "mode": "raw", "raw": "{}" },
+            "url": {
+              "raw": "{{baseUrl}}/api/atms/{{atmId}}/withdrawal-quotes/{{quoteId}}/confirm",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "atms", "{{atmId}}", "withdrawal-quotes", "{{quoteId}}", "confirm"]
+            }
+          }
+        },
+        {
+          "name": "Confirm again with same Idempotency-Key (replay)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Same result returned, nothing debited twice', () => {",
+                  "    pm.response.to.have.status(200);",
+                  "    pm.expect(pm.response.headers.get('Idempotent-Replayed')).to.eql('true');",
+                  "    pm.expect(pm.response.json().withdrawalId).to.eql(pm.collectionVariables.get('withdrawalId'));",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Idempotency-Key", "value": "{{idempotencyKey}}" }
+            ],
+            "body": { "mode": "raw", "raw": "{}" },
+            "url": {
+              "raw": "{{baseUrl}}/api/atms/{{atmId}}/withdrawal-quotes/{{quoteId}}/confirm",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "atms", "{{atmId}}", "withdrawal-quotes", "{{quoteId}}", "confirm"]
+            }
+          }
+        },
+        {
+          "name": "Deposit",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Notes routed to cassettes, unrecognised returned', () => {",
+                  "    pm.response.to.have.status(201);",
+                  "    const d = pm.response.json();",
+                  "    pm.expect(d.accepted.find(a => a.cassetteSlot === 2).count).to.eql(4);",
+                  "    pm.expect(d.accepted.find(a => a.cassetteType === 'DEPOSIT').currency).to.eql('EUR');",
+                  "    pm.expect(d.returned.unrecognizedCount).to.eql(2);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"cardNumber\": \"{{cardNumber}}\",\n  \"notes\": [\n    { \"currency\": \"TRY\", \"denomination\": 100, \"count\": 4 },\n    { \"currency\": \"EUR\", \"denomination\": 50, \"count\": 3 }\n  ],\n  \"unrecognizedCount\": 2\n}"
+            },
+            "url": { "raw": "{{baseUrl}}/api/atms/{{atmId}}/deposits", "host": ["{{baseUrl}}"], "path": ["api", "atms", "{{atmId}}", "deposits"] }
+          }
+        },
+        {
+          "name": "Switch to maintenance",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('ATM is in MAINTENANCE', () => {",
+                  "    pm.response.to.have.status(200);",
+                  "    const atm = pm.response.json();",
+                  "    pm.expect(atm.state).to.eql('MAINTENANCE');",
+                  "    // Prepare the hand count: everything matches except one TRY 50 note missing (TRY 50 ≤ 1,000 → applied at once).",
+                  "    const cassettes = atm.cassettes.map(c => c.type === 'DEPOSIT'",
+                  "        ? { slot: c.slot, notes: c.notes.map(n => ({ currency: n.currency, denomination: n.denomination, count: n.count })) }",
+                  "        : { slot: c.slot, count: c.slot === 3 ? c.count - 1 : c.count });",
+                  "    pm.collectionVariables.set('reconciliationBody', JSON.stringify({ cassettes }, null, 2));",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "X-User", "value": "operator.alice" }
+            ],
+            "body": { "mode": "raw", "raw": "{\n  \"targetState\": \"MAINTENANCE\"\n}" },
+            "url": { "raw": "{{baseUrl}}/api/atms/{{atmId}}/state", "host": ["{{baseUrl}}"], "path": ["api", "atms", "{{atmId}}", "state"] }
+          }
+        },
+        {
+          "name": "Reconcile (hand count)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Difference recorded and applied', () => {",
+                  "    pm.response.to.have.status(201);",
+                  "    const r = pm.response.json();",
+                  "    pm.expect(r.status).to.eql('APPLIED');",
+                  "    pm.expect(r.totalAbsoluteDifferenceTry).to.eql(50);",
+                  "    pm.expect(r.lines.find(l => l.cassetteSlot === 3).difference).to.eql(-1);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "X-User", "value": "operator.alice" }
+            ],
+            "body": { "mode": "raw", "raw": "{{reconciliationBody}}" },
+            "url": { "raw": "{{baseUrl}}/api/atms/{{atmId}}/reconciliations", "host": ["{{baseUrl}}"], "path": ["api", "atms", "{{atmId}}", "reconciliations"] }
+          }
+        },
+        {
+          "name": "Operations report",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Per cassette counts and totals per currency and in TRY', () => {",
+                  "    pm.response.to.have.status(200);",
+                  "    const report = pm.response.json();",
+                  "    const atm = report.atms[0];",
+                  "    pm.expect(atm.cassettes).to.have.lengthOf(5);",
+                  "    atm.cassettes.forEach(c => pm.expect(c.available).to.eql(c.count - c.reserved));",
+                  "    pm.expect(atm.totals.map(t => t.currency)).to.include.members(['TRY', 'USD', 'EUR']);",
+                  "    pm.expect(atm.totalTry).to.be.above(0);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/api/reports/operations?atmId={{atmId}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "reports", "operations"],
+              "query": [{ "key": "atmId", "value": "{{atmId}}" }]
+            }
+          }
+        },
+        {
+          "name": "Ledger consistency check",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Stored balances match the movement ledger', () => {",
+                  "    pm.response.to.have.status(200);",
+                  "    pm.expect(pm.response.json().isConsistent).to.be.true;",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "url": { "raw": "{{baseUrl}}/api/atms/{{atmId}}/consistency-check", "host": ["{{baseUrl}}"], "path": ["api", "atms", "{{atmId}}", "consistency-check"] }
+          }
+        }
+      ]
+    },
+    {
+      "name": "2. Four-eyes reconciliation (optional, run after folder 1)",
+      "item": [
+        {
+          "name": "Reconcile with large difference (needs approval)",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// 12 x TRY 100 missing → TRY 1,200 > TRY 1,000 threshold.",
+                  "pm.sendRequest(pm.variables.replaceIn('{{baseUrl}}/api/atms/{{atmId}}'), (err, res) => {",
+                  "    const atm = res.json();",
+                  "    const cassettes = atm.cassettes.map(c => c.type === 'DEPOSIT'",
+                  "        ? { slot: c.slot, notes: c.notes.map(n => ({ currency: n.currency, denomination: n.denomination, count: n.count })) }",
+                  "        : { slot: c.slot, count: c.slot === 2 ? c.count - 12 : c.count });",
+                  "    pm.collectionVariables.set('reconciliationBody', JSON.stringify({ cassettes }, null, 2));",
+                  "});"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Reconciliation awaits approval', () => {",
+                  "    pm.response.to.have.status(201);",
+                  "    const r = pm.response.json();",
+                  "    pm.expect(r.status).to.eql('AWAITING_APPROVAL');",
+                  "    pm.collectionVariables.set('reconciliationId', r.id);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "X-User", "value": "operator.alice" }
+            ],
+            "body": { "mode": "raw", "raw": "{{reconciliationBody}}" },
+            "url": { "raw": "{{baseUrl}}/api/atms/{{atmId}}/reconciliations", "host": ["{{baseUrl}}"], "path": ["api", "atms", "{{atmId}}", "reconciliations"] }
+          }
+        },
+        {
+          "name": "Put in service is blocked while awaiting approval",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('409 RECONCILIATION_PENDING', () => {",
+                  "    pm.response.to.have.status(409);",
+                  "    pm.expect(pm.response.json().errorCode).to.eql('RECONCILIATION_PENDING');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{\n  \"targetState\": \"IN_SERVICE\"\n}" },
+            "url": { "raw": "{{baseUrl}}/api/atms/{{atmId}}/state", "host": ["{{baseUrl}}"], "path": ["api", "atms", "{{atmId}}", "state"] }
+          }
+        },
+        {
+          "name": "Approve by same user (rejected)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('403 SAME_USER_APPROVAL', () => {",
+                  "    pm.response.to.have.status(403);",
+                  "    pm.expect(pm.response.json().errorCode).to.eql('SAME_USER_APPROVAL');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "X-User", "value": "operator.alice" }
+            ],
+            "body": { "mode": "raw", "raw": "{}" },
+            "url": { "raw": "{{baseUrl}}/api/reconciliations/{{reconciliationId}}/approve", "host": ["{{baseUrl}}"], "path": ["api", "reconciliations", "{{reconciliationId}}", "approve"] }
+          }
+        },
+        {
+          "name": "Approve by a different user",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Approved and applied', () => {",
+                  "    pm.response.to.have.status(200);",
+                  "    const r = pm.response.json();",
+                  "    pm.expect(r.status).to.eql('APPROVED');",
+                  "    pm.expect(r.decidedBy).to.eql('supervisor.bob');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "X-User", "value": "supervisor.bob" }
+            ],
+            "body": { "mode": "raw", "raw": "{\n  \"comment\": \"Recounted with branch manager\"\n}" },
+            "url": { "raw": "{{baseUrl}}/api/reconciliations/{{reconciliationId}}/approve", "host": ["{{baseUrl}}"], "path": ["api", "reconciliations", "{{reconciliationId}}", "approve"] }
+          }
+        },
+        {
+          "name": "Put back in service",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('ATM is IN_SERVICE again', () => {",
+                  "    pm.response.to.have.status(200);",
+                  "    pm.expect(pm.response.json().state).to.eql('IN_SERVICE');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{\n  \"targetState\": \"IN_SERVICE\"\n}" },
+            "url": { "raw": "{{baseUrl}}/api/atms/{{atmId}}/state", "host": ["{{baseUrl}}"], "path": ["api", "atms", "{{atmId}}", "state"] }
+          }
+        },
+        {
+          "name": "Movement ledger (adjustments)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Adjustments are recorded as immutable movements', () => {",
+                  "    pm.response.to.have.status(200);",
+                  "    pm.expect(pm.response.json().length).to.be.at.least(2);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/api/atms/{{atmId}}/movements?type=RECONCILIATION_ADJUSTMENT",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "atms", "{{atmId}}", "movements"],
+              "query": [{ "key": "type", "value": "RECONCILIATION_ADJUSTMENT" }]
+            }
+          }
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,42 @@
+name: atm-cash-management
+
+services:
+  sqlserver:
+    image: mcr.microsoft.com/mssql/server:2022-latest
+    container_name: atm-sqlserver
+    environment:
+      ACCEPT_EULA: "Y"
+      MSSQL_PID: Developer
+      MSSQL_SA_PASSWORD: ${MSSQL_SA_PASSWORD:-Atm_Str0ng!Passw0rd}
+    ports:
+      # Host port 14333 avoids clashing with a locally installed SQL Server on 1433.
+      - "${MSSQL_HOST_PORT:-14333}:1433"
+    volumes:
+      - sqlserver-data:/var/opt/mssql
+    healthcheck:
+      test: ["CMD-SHELL", "/opt/mssql-tools18/bin/sqlcmd -S localhost -U sa -P \"$${MSSQL_SA_PASSWORD}\" -C -Q 'SELECT 1' || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+
+  api:
+    build:
+      context: .
+      dockerfile: src/Atm.Api/Dockerfile
+    container_name: atm-api
+    depends_on:
+      sqlserver:
+        condition: service_healthy
+    environment:
+      ASPNETCORE_ENVIRONMENT: Development
+      ASPNETCORE_HTTP_PORTS: "8080"
+      ConnectionStrings__AtmDb: "Server=sqlserver,1433;Database=AtmCashManagement;User Id=sa;Password=${MSSQL_SA_PASSWORD:-Atm_Str0ng!Passw0rd};TrustServerCertificate=True;Encrypt=False"
+      Database__MigrateOnStartup: "true"
+      # Demo value only: supply a real secret through your secret store in any shared environment.
+      CardHashing__Secret: ${CARD_HASH_SECRET:-docker-compose-demo-secret-change-me}
+    ports:
+      - "8080:8080"
+
+volumes:
+  sqlserver-data:
